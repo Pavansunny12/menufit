@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronRight, User, Bell, Shield, HelpCircle, LogOut, Scale, Target, Activity } from 'lucide-react';
 import { BottomNavigation } from '@/components/BottomNavigation';
 import { toast } from '@/hooks/use-toast';
+import { supabase } from '@/lib/supabase';
 
 export const Settings = () => {
   const [profile, setProfile] = useState<any>({});
@@ -27,9 +28,12 @@ export const Settings = () => {
     'gain-weight': 'Gain Muscle',
   };
 
-  const handleLogout = () => {
-    // Clear session but preserve profile data
+  const handleLogout = async () => {
+    if (supabase) await supabase.auth.signOut();
+    // Clear all app state
     localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('userEmail');
     toast({ title: "Logged out", description: "See you soon!" });
     setTimeout(() => window.location.reload(), 800);
   };
