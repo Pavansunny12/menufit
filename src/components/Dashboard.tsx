@@ -1,14 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { ChartContainer } from '@/components/ui/chart';
 import { PieChart, Pie, Cell } from 'recharts';
-import { Camera, Flame, Beef, Wheat, Droplet, Plus, ChevronLeft, ChevronRight, Scan, PencilLine } from 'lucide-react';
+import { Camera, Flame, Beef, Wheat, Droplet, Plus, ChevronLeft, ChevronRight, Scan, PencilLine, Search, X, Loader2 } from 'lucide-react';
 import { CameraCapture } from './CameraCapture';
 import { BottomNavigation } from './BottomNavigation';
 import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase';
+import { analyzeImageNutrition } from '@/lib/openai';
+import { searchFoods, FoodSearchResult } from '@/lib/foodSearch';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,10 +22,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 export const Dashboard = () => {
   const [userData, setUserData] = useState<any>(null);
@@ -36,12 +36,17 @@ export const Dashboard = () => {
   // Data state
   const [meals, setMeals] = useState<any[]>([]);
   
-  // Manual entry form state
-  const [manualFoodName, setManualFoodName] = useState("");
-  const [manualCalories, setManualCalories] = useState("");
-  const [manualProtein, setManualProtein] = useState("");
-  const [manualCarbs, setManualCarbs] = useState("");
-  const [manualFats, setManualFats] = useState("");
+  // Manual / food search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<FoodSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedFood, setSelectedFood] = useState<FoodSearchResult | null>(null);
+  // Custom manual override fields
+  const [manualCalories, setManualCalories] = useState('');
+  const [manualProtein, setManualProtein] = useState('');
+  const [manualCarbs, setManualCarbs] = useState('');
+  const [manualFats, setManualFats] = useState('');
+  const searchTimerRef = useRef<any>(null);
   
   useEffect(() => {
     // Load user data from localStorage
@@ -136,109 +141,96 @@ export const Dashboard = () => {
 
   const streakCount = 1;
 
+  const saveMeal = async (newMeal: any) => {
+    const updatedMeals = [newMeal, ...meals];
+    setMeals(updatedMeals);
+    saveLocalMeals(updatedMeals);
+    toast({ title: `✅ Added ${newMeal.name}`, description: `${newMeal.calories} cal · ${newMeal.protein}g protein` });
+    if (supabase) {
+      try {
+        await supabase.from('meals').insert([{
+          name: newMeal.name, calories: newMeal.calories,
+          protein: newMeal.protein, carbs: newMeal.carbs,
+          fat: newMeal.fat, category: newMeal.category
+        }]);
+      } catch (e) { console.error('Supabase insert failed, saved locally'); }
+    }
+  };
+
   const handlePhotoCapture = async (imageBlob: Blob) => {
     setIsCameraOpen(false);
-    toast({
-      title: "Analyzing Image",
-      description: "Asking OpenAI what food this is..."
-    });
-
+    toast({ title: '🔍 Analyzing Image', description: 'Asking AI to identify the food...' });
     try {
       const reader = new FileReader();
       reader.readAsDataURL(imageBlob);
       reader.onloadend = async () => {
-        const base64data = reader.result;
-        const res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: base64data })
-        });
-        const data = await res.json();
-        
-        if (!res.ok) {
-          toast({ title: "OpenAI Error", description: data.error?.message || data.error, variant: "destructive" });
-          return;
-        }
-
-        const newMeal = {
-          id: Date.now(),
-          name: data.name || "Scanned Food",
-          calories: data.calories || 0,
-          protein: data.protein || 0,
-          carbs: data.carbs || 0,
-          fat: data.fat || 0,
-          category: 'Snacks',
-          type: 'scanned',
-          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-        };
-
-        const updatedMeals = [newMeal, ...meals];
-        setMeals(updatedMeals);
-        saveLocalMeals(updatedMeals);
-        toast({ title: `Added ${newMeal.name}`, description: `Logged ${newMeal.calories} calories!` });
-
-        if (supabase) {
-          try {
-            await supabase.from('meals').insert([{
-              name: newMeal.name,
-              calories: newMeal.calories,
-              protein: newMeal.protein,
-              carbs: newMeal.carbs,
-              fat: newMeal.fat,
-              category: newMeal.category
-            }]);
-          } catch(e) { console.error("Supabase insert failed, but saved locally"); }
+        try {
+          const data = await analyzeImageNutrition(reader.result as string);
+          await saveMeal({
+            id: Date.now(), name: data.name || 'Scanned Food',
+            calories: data.calories || 0, protein: data.protein || 0,
+            carbs: data.carbs || 0, fat: data.fat || 0,
+            category: 'Meals', type: 'scanned',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          });
+        } catch (e: any) {
+          toast({ title: 'AI Error', description: e.message || 'Failed to analyze image.', variant: 'destructive' });
         }
       };
     } catch (e) {
-      toast({ title: "Error", description: "Failed to process image.", variant: "destructive" });
+      toast({ title: 'Error', description: 'Failed to read image file.', variant: 'destructive' });
     }
   };
 
+  const handleSearchChange = (q: string) => {
+    setSearchQuery(q);
+    setSelectedFood(null);
+    setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (q.trim().length < 2) { setSearchResults([]); return; }
+    setIsSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchFoods(q);
+        setSearchResults(results);
+      } catch (e) {
+        toast({ title: 'Search Error', description: 'Could not fetch foods. Check your connection.', variant: 'destructive' });
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+  };
+
+  const handleSelectFood = (food: FoodSearchResult) => {
+    setSelectedFood(food);
+    setSearchQuery(food.name);
+    setSearchResults([]);
+    setManualCalories(food.calories.toString());
+    setManualProtein(food.protein.toString());
+    setManualCarbs(food.carbs.toString());
+    setManualFats(food.fat.toString());
+  };
+
   const handleManualLog = async () => {
-    if (!manualFoodName || !manualCalories) {
-      toast({ title: "Validation Error", description: "Name and Calories are required.", variant: "destructive" });
+    const name = selectedFood?.name || searchQuery.trim();
+    if (!name || !manualCalories) {
+      toast({ title: 'Required fields missing', description: 'Please select a food and confirm its calories.', variant: 'destructive' });
       return;
     }
-
     const newMeal = {
-      id: Date.now(),
-      name: manualFoodName,
+      id: Date.now(), name,
       calories: parseInt(manualCalories) || 0,
       protein: parseInt(manualProtein) || 0,
       carbs: parseInt(manualCarbs) || 0,
       fat: parseInt(manualFats) || 0,
-      category: 'Snacks',
-      type: 'manual',
-      time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+      category: 'Meals', type: 'manual',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-
-    const updatedMeals = [newMeal, ...meals];
-    setMeals(updatedMeals);
-    saveLocalMeals(updatedMeals);
-    
-    // Reset form
-    setManualFoodName("");
-    setManualCalories("");
-    setManualProtein("");
-    setManualCarbs("");
-    setManualFats("");
+    // reset
+    setSearchQuery(''); setSelectedFood(null); setSearchResults([]);
+    setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
     setIsManualEntryOpen(false);
-
-    toast({ title: `Added ${newMeal.name}`, description: `Logged manually!` });
-
-    if (supabase) {
-      try {
-        await supabase.from('meals').insert([{
-          name: newMeal.name,
-          calories: newMeal.calories,
-          protein: newMeal.protein,
-          carbs: newMeal.carbs,
-          fat: newMeal.fat,
-          category: newMeal.category
-        }]);
-      } catch(e) { console.error("Supabase insert failed, but saved locally"); }
-    }
+    await saveMeal(newMeal);
   };
 
   if (!userData) {
@@ -426,41 +418,115 @@ export const Dashboard = () => {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Manual Entry Dialog */}
-      <Dialog open={isManualEntryOpen} onOpenChange={setIsManualEntryOpen}>
-        <DialogContent className="sm:max-w-[425px] rounded-2xl w-[90vw]">
-          <DialogHeader>
-            <DialogTitle className="text-xl">Log Food Manually</DialogTitle>
+      {/* Food Search Dialog */}
+      <Dialog open={isManualEntryOpen} onOpenChange={(open) => {
+        setIsManualEntryOpen(open);
+        if (!open) {
+          setSearchQuery(''); setSelectedFood(null);
+          setSearchResults([]);
+          setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
+        }
+      }}>
+        <DialogContent className="sm:max-w-[480px] rounded-2xl w-[95vw] max-h-[90vh] overflow-hidden flex flex-col p-0">
+          <DialogHeader className="px-5 pt-5 pb-0">
+            <DialogTitle className="text-xl">Search Food</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="name">Food Name</Label>
-              <Input id="name" placeholder="e.g. Apple" value={manualFoodName} onChange={(e) => setManualFoodName(e.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="calories">Calories (kcal)</Label>
-              <Input id="calories" type="number" placeholder="0" value={manualCalories} onChange={(e) => setManualCalories(e.target.value)} />
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="grid gap-2">
-                <Label htmlFor="protein">Protein (g)</Label>
-                <Input id="protein" type="number" placeholder="0" value={manualProtein} onChange={(e) => setManualProtein(e.target.value)} />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="carbs">Carbs (g)</Label>
-                <Input id="carbs" type="number" placeholder="0" value={manualCarbs} onChange={(e) => setManualCarbs(e.target.value)} />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="fats">Fats (g)</Label>
-                <Input id="fats" type="number" placeholder="0" value={manualFats} onChange={(e) => setManualFats(e.target.value)} />
-              </div>
+
+          {/* Search Input */}
+          <div className="px-5 pt-4 pb-3 relative">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                className="pl-9 pr-9 h-12 rounded-xl bg-muted border-0 text-base"
+                placeholder="Search foods, brands..."
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                autoFocus
+              />
+              {searchQuery && (
+                <button className="absolute right-3 top-1/2 -translate-y-1/2" onClick={() => handleSearchChange('')}>
+                  <X className="w-4 h-4 text-muted-foreground" />
+                </button>
+              )}
             </div>
           </div>
-          <DialogFooter>
-            <Button onClick={handleManualLog} className="w-full rounded-xl py-6 font-bold">
-              Save Food
-            </Button>
-          </DialogFooter>
+
+          {/* Search Results List */}
+          <div className="flex-1 overflow-y-auto px-3 pb-2">
+            {isSearching && (
+              <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="text-sm">Searching...</span>
+              </div>
+            )}
+
+            {!isSearching && searchQuery.length >= 2 && searchResults.length === 0 && !selectedFood && (
+              <p className="text-center text-muted-foreground text-sm py-8">No results found. Try a different name.</p>
+            )}
+
+            {!selectedFood && searchResults.map((food) => (
+              <button
+                key={food.id}
+                onClick={() => handleSelectFood(food)}
+                className="w-full text-left px-3 py-3.5 rounded-xl hover:bg-muted transition-colors flex items-center justify-between gap-3 mb-1"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-foreground text-sm truncate">{food.name}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {food.brand ? `${food.brand} · ` : ''}{food.servingSize || '1 serving'}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-bold text-foreground text-sm">{food.calories} cal</div>
+                  <div className="text-xs text-muted-foreground">
+                    P:{food.protein}g C:{food.carbs}g F:{food.fat}g
+                  </div>
+                </div>
+              </button>
+            ))}
+
+            {!searchQuery && (
+              <p className="text-center text-muted-foreground text-sm py-8 px-4">
+                Type at least 2 characters to search from 700,000+ foods
+              </p>
+            )}
+          </div>
+
+          {/* Selected Food - Confirm & Edit Panel */}
+          {selectedFood && (
+            <div className="border-t border-border px-5 pt-4 pb-5 space-y-3 bg-muted/30">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-foreground text-sm">{selectedFood.name}</div>
+                  {selectedFood.brand && (
+                    <div className="text-xs text-muted-foreground">{selectedFood.brand} · {selectedFood.servingSize}</div>
+                  )}
+                </div>
+                <button onClick={() => { setSelectedFood(null); setSearchQuery(''); setSearchResults([]); }} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {[{label:'Cal', value: manualCalories, set: setManualCalories},
+                  {label:'Protein', value: manualProtein, set: setManualProtein},
+                  {label:'Carbs', value: manualCarbs, set: setManualCarbs},
+                  {label:'Fats', value: manualFats, set: setManualFats}].map(f => (
+                  <div key={f.label} className="text-center">
+                    <div className="text-xs text-muted-foreground mb-1">{f.label}</div>
+                    <Input
+                      type="number"
+                      value={f.value}
+                      onChange={e => f.set(e.target.value)}
+                      className="text-center h-9 rounded-lg text-sm border-input bg-background font-semibold p-1"
+                    />
+                  </div>
+                ))}
+              </div>
+              <Button onClick={handleManualLog} className="w-full rounded-xl h-11 font-bold">
+                + Log this food
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

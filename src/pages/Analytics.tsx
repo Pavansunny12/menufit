@@ -1,78 +1,121 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Info, CheckCircle } from 'lucide-react';
+import { Info, CheckCircle, Flame, Beef, Wheat, Droplet } from 'lucide-react';
 import { BottomNavigation } from '@/components/BottomNavigation';
+import { supabase } from '@/lib/supabase';
 
 export const Analytics = () => {
   const [userData, setUserData] = useState<any>(null);
   const [activeTimeFilter, setActiveTimeFilter] = useState('90 Days');
+  const [meals, setMeals] = useState<any[]>([]);
+  const [activeNutritionTab, setActiveNutritionTab] = useState('This Week');
 
   useEffect(() => {
-    // Load user data from localStorage
+    // Load user data from localStorage — using the CORRECT keys from onboarding
     const storedData = {
       goal: localStorage.getItem('fitnessGoal'),
       gender: localStorage.getItem('gender'),
-      height: localStorage.getItem('height'),
-      weight: localStorage.getItem('weight'),
+      height: localStorage.getItem('userHeight'),    // fixed key
+      weight: localStorage.getItem('userWeight'),    // fixed key
       birthday: localStorage.getItem('birthday'),
+      targetCalories: localStorage.getItem('targetCalories'),
+      targetProtein: localStorage.getItem('targetProtein'),
+      targetCarbs: localStorage.getItem('targetCarbs'),
+      targetFats: localStorage.getItem('targetFats'),
     };
     setUserData(storedData);
+    fetchMeals();
   }, []);
 
-  // Calculate BMI and status
+  const loadLocalMeals = () => {
+    try {
+      const saved = localStorage.getItem('nutrivision_meals_v2');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const fetchMeals = async () => {
+    if (!supabase) {
+      setMeals(loadLocalMeals());
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('meals')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      if (data) setMeals(data);
+    } catch (e) {
+      console.error('Supabase fetch failed, using local storage', e);
+      setMeals(loadLocalMeals());
+    }
+  };
+
+  // Calculate BMI using correct keys
   const calculateBMI = () => {
-    if (!userData?.height || !userData?.weight) return { bmi: 0, status: 'Unknown', color: 'gray' };
-    
+    if (!userData?.height || !userData?.weight) return { bmi: 0, status: 'Unknown', color: 'gray', progress: 0 };
+
     const heightInMeters = parseInt(userData.height) / 100;
     const weight = parseInt(userData.weight);
     const bmi = weight / (heightInMeters * heightInMeters);
-    
+
     let status = 'Unknown';
     let color = 'gray';
     let progress = 50;
-    
+
     if (bmi < 18.5) {
-      status = 'Underweight';
-      color = 'blue';
-      progress = 20;
+      status = 'Underweight'; color = 'blue'; progress = 20;
     } else if (bmi >= 18.5 && bmi < 25) {
-      status = 'Healthy';
-      color = 'green';
-      progress = 60;
+      status = 'Healthy'; color = 'green'; progress = 60;
     } else if (bmi >= 25 && bmi < 30) {
-      status = 'Overweight';
-      color = 'yellow';
-      progress = 80;
+      status = 'Overweight'; color = 'yellow'; progress = 80;
     } else {
-      status = 'Obese';
-      color = 'red';
-      progress = 95;
+      status = 'Obese'; color = 'red'; progress = 95;
     }
-    
-    return { bmi: bmi.toFixed(2), status, color, progress };
+
+    return { bmi: bmi.toFixed(1), status, color, progress };
   };
 
   const { bmi, status, color, progress } = calculateBMI();
-  
   const timeFilters = ['90 Days', '6 Months', '1 Year', 'All time'];
-  
-  // Mock weight progress data
-  const weightData = [
-    { date: '26 Aug', weight: 71.2 },
-    { date: '26 Aug', weight: 71.0 },
-    { date: '26 Aug', weight: 70.8 },
-    { date: '26 Aug', weight: 70.6 },
-    { date: '26 Aug', weight: 70.4 }
-  ];
-
-  // Mock nutrition data
   const nutritionTabs = ['This Week', 'Last Week', '2 wks. ago', '3 wks. ago'];
-  const [activeNutritionTab, setActiveNutritionTab] = useState('This Week');
 
-  const currentWeight = userData?.weight ? parseInt(userData.weight) : 71;
-  const goalWeight = 76; // Mock goal weight
+  // Calculate nutrition stats from real meals
+  const now = new Date();
+  const filterDays: Record<string, number> = {
+    '90 Days': 90, '6 Months': 180, '1 Year': 365, 'All time': 99999
+  };
+  const cutoff = new Date(now);
+  cutoff.setDate(now.getDate() - (filterDays[activeTimeFilter] || 90));
+
+  const filteredMeals = meals.filter(m => {
+    if (!m.created_at) return true; // local entries without timestamps
+    return new Date(m.created_at) >= cutoff;
+  });
+
+  const totalCalories = filteredMeals.reduce((sum, m) => sum + (m.calories || 0), 0);
+  const totalProtein = filteredMeals.reduce((sum, m) => sum + (m.protein || 0), 0);
+  const totalCarbs = filteredMeals.reduce((sum, m) => sum + (m.carbs || 0), 0);
+  const totalFats = filteredMeals.reduce((sum, m) => sum + (m.fat || 0), 0);
+
+  const days = filterDays[activeTimeFilter] || 90;
+  const dailyAvg = filteredMeals.length > 0 ? Math.round(totalCalories / Math.max(1, days)) : 0;
+
+  const currentWeight = userData?.weight ? parseInt(userData.weight) : null;
+  const goalWeight = 76;
+
+  const bmiStatusColor: Record<string, string> = {
+    green: 'bg-green-100 text-green-800',
+    blue: 'bg-blue-100 text-blue-800',
+    yellow: 'bg-yellow-100 text-yellow-800',
+    red: 'bg-red-100 text-red-800',
+    gray: 'bg-gray-100 text-gray-800',
+  };
 
   if (!userData) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
@@ -102,7 +145,9 @@ export const Analytics = () => {
           <CardContent className="p-5">
             <div className="space-y-3">
               <span className="text-base text-muted-foreground">Current Weight</span>
-              <div className="text-3xl font-bold text-foreground">{currentWeight} kg</div>
+              <div className="text-3xl font-bold text-foreground">
+                {currentWeight ? `${currentWeight} kg` : 'Not set'}
+              </div>
               <p className="text-muted-foreground text-sm leading-relaxed">
                 Try to update once a week so we can adjust your plan to ensure you hit your goal.
               </p>
@@ -116,124 +161,49 @@ export const Analytics = () => {
         {/* BMI Section */}
         <div className="space-y-3">
           <h2 className="text-lg font-bold text-foreground">Your BMI</h2>
-          
           <Card className="bg-card rounded-2xl shadow-sm border-0">
             <CardContent className="p-5">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground text-sm">Your weight is</span>
-                    <div className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+                    <div className={`${bmiStatusColor[color]} px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1`}>
                       <CheckCircle className="w-3 h-3" />
                       {status}
                     </div>
                   </div>
                   <Info className="w-4 h-4 text-muted-foreground" />
                 </div>
-                
+
                 <div className="text-3xl font-bold text-foreground">{bmi}</div>
-                
+
                 <div className="space-y-2">
-                  <Progress value={progress} className="h-2 bg-muted">
-                    <div 
-                      className="h-full bg-gradient-to-r from-blue-500 via-green-500 via-yellow-500 to-red-500 rounded-full transition-all duration-300"
-                      style={{ width: `${progress}%` }}
+                  {/* BMI bar */}
+                  <div className="h-2 bg-gradient-to-r from-blue-400 via-green-400 via-yellow-400 to-red-500 rounded-full relative">
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-foreground rounded-full shadow"
+                      style={{ left: `${Math.min(progress, 95)}%` }}
                     />
-                  </Progress>
-                  
+                  </div>
+
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="text-muted-foreground">Underweight</span>
+                      <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
+                      <span className="text-muted-foreground">Underweight (&lt;18.5)</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="text-muted-foreground">Healthy</span>
+                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                      <span className="text-muted-foreground">Healthy (18.5–25)</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                      <span className="text-muted-foreground">Overweight</span>
+                      <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                      <span className="text-muted-foreground">Overweight (25–30)</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                      <span className="text-muted-foreground">Obese</span>
+                      <span className="text-muted-foreground">Obese (&gt;30)</span>
                     </div>
                   </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Goal Progress Section */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-foreground">Goal Progress</h2>
-            <span className="text-muted-foreground text-sm">0.0% <span className="text-muted-foreground/60">Goal achieved</span></span>
-          </div>
-          
-          {/* Time Filter Tabs */}
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {timeFilters.map((filter) => (
-              <Button
-                key={filter}
-                variant={activeTimeFilter === filter ? "default" : "outline"}
-                onClick={() => setActiveTimeFilter(filter)}
-                className={`rounded-full px-3 py-1 text-xs whitespace-nowrap h-8 ${
-                  activeTimeFilter === filter 
-                    ? 'bg-foreground text-background' 
-                    : 'bg-card text-muted-foreground border-border hover:bg-accent'
-                }`}
-              >
-                {filter}
-              </Button>
-            ))}
-          </div>
-          
-          {/* Weight Chart */}
-          <Card className="bg-card rounded-2xl shadow-sm border-0">
-            <CardContent className="p-4">
-              <div className="h-32 relative">
-                {/* Y-axis labels */}
-                <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-muted-foreground">
-                  <span>72</span>
-                  <span>71.6</span>
-                  <span>71.2</span>
-                  <span>70.8</span>
-                  <span>70.4</span>
-                  <span>70</span>
-                </div>
-                
-                {/* Chart area */}
-                <div className="ml-8 h-full bg-muted rounded-lg flex items-end justify-between px-3 pb-3 relative">
-                  {/* Grid lines */}
-                  <div className="absolute inset-0 flex flex-col justify-between">
-                    {[...Array(6)].map((_, i) => (
-                      <div key={i} className="border-t border-border/50"></div>
-                    ))}
-                  </div>
-                  
-                  {/* Mock data points */}
-                  <div className="w-full h-full relative">
-                    <svg className="w-full h-full" viewBox="0 0 200 100">
-                      <polyline
-                        fill="none"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth="2"
-                        points="20,80 50,70 80,60 110,55 140,50 170,45"
-                      />
-                      {[20, 50, 80, 110, 140, 170].map((x, i) => (
-                        <circle key={i} cx={x} cy={80 - i * 7} r="3" fill="hsl(var(--primary))" />
-                      ))}
-                    </svg>
-                  </div>
-                </div>
-                
-                {/* X-axis labels */}
-                <div className="ml-8 mt-1 flex justify-between text-xs text-muted-foreground">
-                  {weightData.slice(0, 5).map((data, i) => (
-                    <span key={i}>{data.date.split(' ')[0]}</span>
-                  ))}
                 </div>
               </div>
             </CardContent>
@@ -244,71 +214,83 @@ export const Analytics = () => {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-foreground">Nutrition</h2>
-            <span className="text-muted-foreground text-sm">This vs previous week</span>
           </div>
-          
-          {/* Nutrition Filter Tabs */}
+
+          {/* Time Filter Tabs */}
           <div className="flex gap-2 overflow-x-auto pb-2">
-            {nutritionTabs.map((tab) => (
+            {timeFilters.map((filter) => (
               <Button
-                key={tab}
-                variant={activeNutritionTab === tab ? "default" : "outline"}
-                onClick={() => setActiveNutritionTab(tab)}
+                key={filter}
+                variant={activeTimeFilter === filter ? "default" : "outline"}
+                onClick={() => setActiveTimeFilter(filter)}
                 className={`rounded-full px-3 py-1 text-xs whitespace-nowrap h-8 ${
-                  activeNutritionTab === tab 
-                    ? 'bg-foreground text-background' 
+                  activeTimeFilter === filter
+                    ? 'bg-foreground text-background'
                     : 'bg-card text-muted-foreground border-border hover:bg-accent'
                 }`}
               >
-                {tab}
+                {filter}
               </Button>
             ))}
           </div>
-          
+
           {/* Nutrition Stats */}
           <div className="grid grid-cols-2 gap-3">
             <Card className="bg-card rounded-2xl shadow-sm border-0">
               <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-foreground mb-1">0</div>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Flame className="w-4 h-4 text-orange-500" />
+                </div>
+                <div className="text-2xl font-bold text-foreground mb-1">{totalCalories.toLocaleString()}</div>
                 <div className="text-muted-foreground text-sm">Total calories</div>
               </CardContent>
             </Card>
-            
+
             <Card className="bg-card rounded-2xl shadow-sm border-0">
               <CardContent className="p-4 text-center">
-                <div className="text-2xl font-bold text-foreground mb-1">0.0</div>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Flame className="w-4 h-4 text-yellow-500" />
+                </div>
+                <div className="text-2xl font-bold text-foreground mb-1">{dailyAvg}</div>
                 <div className="text-muted-foreground text-sm">Daily avg.</div>
               </CardContent>
             </Card>
           </div>
-          
-          {/* Weekly Chart */}
+
+          {/* Macros Breakdown */}
           <Card className="bg-card rounded-2xl shadow-sm border-0">
-            <CardContent className="p-4">
-              <div className="h-24 relative">
-                {/* Y-axis */}
-                <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-muted-foreground">
-                  <span>1.2</span>
-                  <span>0.8</span>
-                  <span>0.4</span>
-                  <span>0.0</span>
-                  <span>-0.4</span>
-                  <span>-0.8</span>
+            <CardContent className="p-4 space-y-3">
+              <h3 className="font-semibold text-foreground text-sm">Macros ({activeTimeFilter})</h3>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Beef className="w-4 h-4 text-red-500" />
+                  <span className="text-sm text-muted-foreground">Protein</span>
                 </div>
-                
-                {/* Chart area */}
-                <div className="ml-6 h-full bg-muted rounded-lg relative">
-                  {/* Grid line at zero */}
-                  <div className="absolute top-1/2 left-0 right-0 border-t border-accent"></div>
-                  
-                  {/* X-axis labels */}
-                  <div className="absolute bottom-1 left-0 right-0 flex justify-around text-xs text-muted-foreground">
-                    {['S', 'M', 'T', 'W', 'T', 'F'].map((day) => (
-                      <span key={day}>{day}</span>
-                    ))}
-                  </div>
-                </div>
+                <span className="font-bold text-foreground text-sm">{totalProtein}g</span>
               </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Wheat className="w-4 h-4 text-orange-500" />
+                  <span className="text-sm text-muted-foreground">Carbs</span>
+                </div>
+                <span className="font-bold text-foreground text-sm">{totalCarbs}g</span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Droplet className="w-4 h-4 text-blue-500" />
+                  <span className="text-sm text-muted-foreground">Fats</span>
+                </div>
+                <span className="font-bold text-foreground text-sm">{totalFats}g</span>
+              </div>
+
+              {filteredMeals.length === 0 && (
+                <p className="text-center text-muted-foreground text-xs py-2">
+                  No meals logged yet. Start logging to see your stats!
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
