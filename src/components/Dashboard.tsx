@@ -41,6 +41,7 @@ export const Dashboard = () => {
   const [searchResults, setSearchResults] = useState<FoodSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedFood, setSelectedFood] = useState<FoodSearchResult | null>(null);
+  const [restaurantName, setRestaurantName] = useState<string | undefined>(undefined);
   // Custom manual override fields
   const [manualCalories, setManualCalories] = useState('');
   const [manualProtein, setManualProtein] = useState('');
@@ -185,14 +186,16 @@ export const Dashboard = () => {
   const handleSearchChange = (q: string) => {
     setSearchQuery(q);
     setSelectedFood(null);
+    setRestaurantName(undefined);
     setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     if (q.trim().length < 2) { setSearchResults([]); return; }
     setIsSearching(true);
     searchTimerRef.current = setTimeout(async () => {
       try {
-        const results = await searchFoods(q);
-        setSearchResults(results);
+        const response = await searchFoods(q);
+        setSearchResults(response.results);
+        setRestaurantName(response.restaurantName);
       } catch (e) {
         toast({ title: 'Search Error', description: 'Could not fetch foods. Check your connection.', variant: 'destructive' });
       } finally {
@@ -205,6 +208,7 @@ export const Dashboard = () => {
     setSelectedFood(food);
     setSearchQuery(food.name);
     setSearchResults([]);
+    setRestaurantName(undefined);
     setManualCalories(food.calories.toString());
     setManualProtein(food.protein.toString());
     setManualCarbs(food.carbs.toString());
@@ -228,6 +232,7 @@ export const Dashboard = () => {
     };
     // reset
     setSearchQuery(''); setSelectedFood(null); setSearchResults([]);
+    setRestaurantName(undefined);
     setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
     setIsManualEntryOpen(false);
     await saveMeal(newMeal);
@@ -423,7 +428,7 @@ export const Dashboard = () => {
         setIsManualEntryOpen(open);
         if (!open) {
           setSearchQuery(''); setSelectedFood(null);
-          setSearchResults([]);
+          setSearchResults([]); setRestaurantName(undefined);
           setManualCalories(''); setManualProtein(''); setManualCarbs(''); setManualFats('');
         }
       }}>
@@ -464,6 +469,19 @@ export const Dashboard = () => {
               <p className="text-center text-muted-foreground text-sm py-8">No results found. Try a different name.</p>
             )}
 
+            {/* Restaurant header */}
+            {!selectedFood && restaurantName && searchResults.length > 0 && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-2">
+                <div className="w-8 h-8 rounded-full bg-foreground flex items-center justify-center text-background text-xs font-bold shrink-0">
+                  {restaurantName.charAt(0)}
+                </div>
+                <div>
+                  <div className="font-bold text-foreground text-sm">{restaurantName}</div>
+                  <div className="text-xs text-muted-foreground">{searchResults.length} menu items</div>
+                </div>
+              </div>
+            )}
+
             {!selectedFood && searchResults.map((food) => (
               <button
                 key={food.id}
@@ -473,7 +491,7 @@ export const Dashboard = () => {
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-foreground text-sm truncate">{food.name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {food.brand ? `${food.brand} · ` : ''}{food.servingSize || '1 serving'}
+                    {!restaurantName && food.brand ? `${food.brand} · ` : ''}{food.servingSize || '1 serving'}
                   </div>
                 </div>
                 <div className="text-right shrink-0">
