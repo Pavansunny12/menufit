@@ -85,7 +85,27 @@ const RESTAURANT_ALIASES: Record<string, string> = {
 
 function detectRestaurant(query: string): string | null {
   const q = query.trim().toLowerCase().replace(/['']/g, '').replace(/\s+/g, ' ');
-  return RESTAURANT_ALIASES[q] || null;
+
+  // 1. Exact alias match
+  if (RESTAURANT_ALIASES[q]) return RESTAURANT_ALIASES[q];
+
+  // 2. Prefix match — user typed beginning of alias (e.g. "mc d" matches "mcdonald")
+  for (const [alias, brand] of Object.entries(RESTAURANT_ALIASES)) {
+    // query is a prefix of the alias
+    if (alias.startsWith(q) && q.length >= 3) return brand;
+    // alias is a prefix of the query (e.g. "mcdonalds burger" still resolves McDonald's)
+    if (q.startsWith(alias) && alias.length >= 3) return brand;
+  }
+
+  // 3. Fuzzy: every word in query appears somewhere in the alias
+  const words = q.split(' ').filter(w => w.length >= 2);
+  if (words.length > 0) {
+    for (const [alias, brand] of Object.entries(RESTAURANT_ALIASES)) {
+      if (words.every(w => alias.includes(w))) return brand;
+    }
+  }
+
+  return null;
 }
 
 function getNutrient(nutrients: any[], id: number): number {
@@ -146,7 +166,7 @@ async function searchOpenFoodFacts(query: string): Promise<FoodSearchResult[]> {
 
 async function searchUSDA(query: string, requireAllWords = true): Promise<FoodSearchResult[]> {
   const rwParam = requireAllWords ? '&requireAllWords=true' : '';
-  const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&pageSize=20${rwParam}&dataType=Branded,Survey%20(FNDDS),SR%20Legacy&api_key=${USDA_API_KEY}`;
+  const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&pageSize=20${rwParam}&dataType=Branded,Foundation&api_key=${USDA_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`USDA ${res.status}`);
   const data = await res.json();
@@ -159,6 +179,14 @@ async function searchUSDA(query: string, requireAllWords = true): Promise<FoodSe
 }
 
 async function fetchRestaurantMenu(restaurantName: string): Promise<FoodSearchResult[]> {
+  const brandWords = restaurantName.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+
+  const matchesBrand = (food: any) => {
+    const owner = (food.brandOwner || '').toLowerCase();
+    const bname = (food.brandName || '').toLowerCase();
+    return brandWords.some(w => owner.includes(w) || bname.includes(w));
+  };
+
   // Try USDA first
   try {
     const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(restaurantName)}&pageSize=50&dataType=Branded&api_key=${USDA_API_KEY}`;
@@ -167,10 +195,7 @@ async function fetchRestaurantMenu(restaurantName: string): Promise<FoodSearchRe
       const data = await res.json();
       const foods: FoodSearchResult[] = [];
       for (const food of data.foods || []) {
-        const owner = (food.brandOwner || '').toLowerCase();
-        const bname = (food.brandName || '').toLowerCase();
-        const first = restaurantName.toLowerCase().split(' ')[0];
-        if (!owner.includes(first) && !bname.includes(first)) continue;
+        if (!matchesBrand(food)) continue;
         const parsed = parseUSDAFood(food);
         if (parsed) foods.push(parsed);
       }
@@ -178,13 +203,19 @@ async function fetchRestaurantMenu(restaurantName: string): Promise<FoodSearchRe
     }
   } catch (_) { /* fall through */ }
 
-  // Fall back to Open Food Facts
-  const offResults = await searchOpenFoodFacts(restaurantName);
-  return offResults.filter(f => {
-    const brand = (f.brand || '').toLowerCase();
-    const first = restaurantName.toLowerCase().split(' ')[0];
-    return brand.includes(first);
-  });
+  // Fallback: Open Food Facts
+  try {
+    const offResults = await searchOpenFoodFacts(restaurantName);
+    const filtered = offResults.filter(f => {
+      const brand = (f.brand || '').toLowerCase();
+      return brandWords.some(w => brand.includes(w));
+    });
+    if (filtered.length > 0) return filtered;
+    // If brand filter removed everything, return all OFF results
+    return offResults;
+  } catch (_) {
+    return [];
+  }
 }
 
 export async function searchFoods(query: string): Promise<SearchResponse> {

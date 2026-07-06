@@ -50,12 +50,12 @@ export const Dashboard = () => {
   const searchTimerRef = useRef<any>(null);
   
   useEffect(() => {
-    // Load user data from localStorage
+    // Load user data from localStorage — use correct keys from onboarding
     const storedData = {
       goal: localStorage.getItem('fitnessGoal'),
-      gender: localStorage.getItem('gender'),
-      height: localStorage.getItem('height'),
-      weight: localStorage.getItem('weight'),
+      gender: localStorage.getItem('userGender') || localStorage.getItem('gender'),
+      height: localStorage.getItem('userHeight') || localStorage.getItem('height'),
+      weight: localStorage.getItem('userWeight') || localStorage.getItem('weight'),
       frequency: localStorage.getItem('workoutFrequency'),
       birthday: localStorage.getItem('birthday'),
       calories: localStorage.getItem('targetCalories'),
@@ -127,20 +127,43 @@ export const Dashboard = () => {
     setSelectedDate(date);
   };
   
-  const currentCalories = meals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
+  // Filter meals to only show those logged on selectedDate
+  const selectedDateStr = selectedDate.toDateString();
+  const todayMeals = meals.filter(meal => {
+    if (!meal.created_at && !meal.time) return true; // local entries without date
+    const mealDate = meal.created_at ? new Date(meal.created_at) : new Date();
+    return mealDate.toDateString() === selectedDateStr;
+  });
+
+  const currentCalories = todayMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
   const targetCalories = userData?.calories ? parseInt(userData.calories) : 2200;
   const caloriesLeft = targetCalories - currentCalories;
   
-  const proteinConsumed = meals.reduce((sum, meal) => sum + (meal.protein || 0), 0);
+  const proteinConsumed = todayMeals.reduce((sum, meal) => sum + (meal.protein || 0), 0);
   const targetProtein = userData?.protein ? parseInt(userData.protein) : 150;
   
-  const carbsConsumed = meals.reduce((sum, meal) => sum + (meal.carbs || 0), 0);
+  const carbsConsumed = todayMeals.reduce((sum, meal) => sum + (meal.carbs || 0), 0);
   const targetCarbs = userData?.carbs ? parseInt(userData.carbs) : 275;
   
-  const fatsConsumed = meals.reduce((sum, meal) => sum + (meal.fat || 0), 0);
+  const fatsConsumed = todayMeals.reduce((sum, meal) => sum + (meal.fat || 0), 0);
   const targetFats = userData?.fats ? parseInt(userData.fats) : 73;
 
-  const streakCount = 1;
+  // Real streak: count consecutive days with at least 1 meal
+  const streakCount = (() => {
+    let streak = 0;
+    const check = new Date();
+    for (let i = 0; i < 365; i++) {
+      const ds = check.toDateString();
+      const hasMeal = meals.some(m => {
+        const d = m.created_at ? new Date(m.created_at) : null;
+        return d && d.toDateString() === ds;
+      });
+      if (!hasMeal && i > 0) break;
+      if (hasMeal) streak++;
+      check.setDate(check.getDate() - 1);
+    }
+    return streak;
+  })();
 
   const saveMeal = async (newMeal: any) => {
     const updatedMeals = [newMeal, ...meals];
@@ -197,7 +220,7 @@ export const Dashboard = () => {
         setSearchResults(response.results);
         setRestaurantName(response.restaurantName);
       } catch (e) {
-        toast({ title: 'Search Error', description: 'Could not fetch foods. Check your connection.', variant: 'destructive' });
+        toast({ title: 'No results', description: `Nothing found for "${q}". Try a different spelling.`, variant: 'destructive' });
       } finally {
         setIsSearching(false);
       }
@@ -366,11 +389,11 @@ export const Dashboard = () => {
       {/* Recently Logged */}
       <div className="mb-6">
         <h2 className="text-lg font-bold text-foreground mb-4 px-1">Recently logged</h2>
-        {meals.length === 0 ? (
-          <p className="text-muted-foreground text-center py-4">No meals logged today. Tap + to add food!</p>
+        {todayMeals.length === 0 ? (
+          <p className="text-muted-foreground text-center py-4">No meals logged yet. Tap + to add food!</p>
         ) : (
           <div className="space-y-3">
-            {meals.map((meal, index) => (
+            {todayMeals.map((meal, index) => (
               <Card key={meal.id || index} className="border-0 bg-card rounded-2xl shadow-sm">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">

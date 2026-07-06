@@ -13,8 +13,8 @@ export const Settings = () => {
     setProfile({
       height: localStorage.getItem('userHeight') || 'Not set',
       weight: localStorage.getItem('userWeight') || 'Not set',
-      goal: localStorage.getItem('userGoal') || 'Not set',
-      gender: localStorage.getItem('userGender') || 'Not set',
+      goal: localStorage.getItem('fitnessGoal') || 'Not set',
+      gender: localStorage.getItem('userGender') || localStorage.getItem('gender') || 'Not set',
       targetCalories: localStorage.getItem('targetCalories') || '—',
       targetProtein: localStorage.getItem('targetProtein') || '—',
       targetCarbs: localStorage.getItem('targetCarbs') || '—',
